@@ -1,7 +1,7 @@
 cmake_minimum_required (VERSION 3.16.0)
 project (main CXX)
 include(FetchContent)
-
+set (CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES  ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "") 
 #get ftxui
@@ -21,7 +21,7 @@ add_executable(main ${SRC})
 target_link_libraries(main ftxui::component ftxui::dom ftxui::screen)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/src/memory.txt
     ${CMAKE_CURRENT_BINARY_DIR} COPYONLY)
-set (CMAKE_CXX_STANDARD 17)
+
 #linking options
 add_compile_options(-fsanitize=address)
 add_link_options(-fsanitize=address)

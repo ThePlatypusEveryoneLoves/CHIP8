@@ -1,21 +1,31 @@
+
+
 #include "CHIP8.h"
 #include <fstream>
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
 #include <stdlib.h>
+#include <cmath>
+#include "ftxui/component/event.hpp"           // for Event
 
+using ScreenArray = std::array<std::array<unsigned char, SCREEN_HEIGHT>, SCREEN_WIDTH>;
 const unsigned int FONSET_MEM_LOCATION = 0x50;
 const unsigned int PROGRAM_MEM_START = 0x200;
 const unsigned int CharWidth = 8;
+
 void CHIP8::init(std::string file = "./memory.txt"){
+    
     time_t t;
     srand(time(&t));
-    PROGRAM_COUNTER = 0x200;
+    //set up all of the variables
+    PROGRAM_COUNTER = PROGRAM_MEM_START;
     OPCODE = 0;
     I = 0;
     STACK_POINTER = 0;
-
+    SoundTimer = 60;
+    DelayTimer = 60;
+    //load fontset
     for(int i = 0; i < 80; ++i){
         MEMORY[i+FONSET_MEM_LOCATION] = chip8_fontset[i];
     }
@@ -26,19 +36,23 @@ void CHIP8::init(std::string file = "./memory.txt"){
     }
     unsigned int input{0};
     int i{0};
+    //load program
     while(ProgramReader>>std::hex>>input){
-        //std::cout <<PROGRAM_MEM_START+i<<std::endl;
         MEMORY[PROGRAM_MEM_START+i]=static_cast<unsigned char>(input);
         i++;
         
     }
     ProgramReader.close();
 }
-void CHIP8::EmulateCycle(){
-    OPCODE = static_cast<int>(MEMORY[PROGRAM_COUNTER])<<8|MEMORY[PROGRAM_COUNTER+1];
+void CHIP8::EmulateCycle(ftxui::Event CurrEvent){
+    OPCODE = (MEMORY[PROGRAM_COUNTER])<<8|MEMORY[PROGRAM_COUNTER+1]; 
     unsigned short X = ((OPCODE & 0x0F00)>>8);
-    unsigned short Y = (OPCODE & 0x00F0)>>8;
-     switch(OPCODE & 0xF000){
+    unsigned short Y = ((OPCODE & 0x00F0)>>8);
+    DelayTimer = DelayTimer > 1? DelayTimer-1 : 60;
+    SoundTimer = SoundTimer > 1? SoundTimer-1 : 60;
+
+    // the giant switch statement of OPCODES
+    switch(OPCODE & 0xF000){
         case 0x0000:
             switch(OPCODE & 0x00FF){
                 case 0x00EE:
@@ -48,14 +62,14 @@ void CHIP8::EmulateCycle(){
                     }
                     break;
                 case 0x00E0:
-                    {
+                    { // reset screen
                     SCREEN.fill({});
                     break;
                     }
             }
             break;
         case 0x1000:
-            { //jmp to address
+            { //jump to address
             PROGRAM_COUNTER = OPCODE & 0x0FFF;
             break;
             }
@@ -87,7 +101,8 @@ void CHIP8::EmulateCycle(){
                
             break;
             }
-        case 0x7000:{ //add register X to BYTE and store in register X
+        case 0x7000:
+            { //add register X to BYTE and store in register X
             REGISTERS[X] += OPCODE & 0x00FF;
             break;
             }
@@ -98,7 +113,8 @@ void CHIP8::EmulateCycle(){
                     REGISTERS[X] = REGISTERS[Y];
                     break;
                     }
-                case 0x0001:{ // register X = register X OR register Y
+                case 0x0001:
+                    { // register X = register X OR register Y
                     REGISTERS[X] |= REGISTERS[Y];
                     break;
                     }
@@ -107,7 +123,8 @@ void CHIP8::EmulateCycle(){
                     REGISTERS[X] &= REGISTERS[Y];
                     break;
                     }                
-                case 0x0003:{ // register X = register X XOR register Y
+                case 0x0003:
+                    { // register X = register X XOR register Y
                     REGISTERS[X] ^= REGISTERS[Y];
                     break;
                     }
@@ -121,7 +138,7 @@ void CHIP8::EmulateCycle(){
                     break;
                     }
                 case 0x0005:
-                    { // register X -=  register Y, NOT(underflow bit) in register F(always)                  
+                    { // register X -=  register Y, NOT(underflow bit) in register F(always)             
                     REGISTERS[0xF] = 0;
                     if (REGISTERS[X] > REGISTERS[Y]){
                         REGISTERS[0xF] = 1;
@@ -136,8 +153,8 @@ void CHIP8::EmulateCycle(){
                     break;
                     }
                 case 0x0007: 
-                    { // register X = register Y - register X, NOT(underflow bit) in register F(alway)                                    
-                       REGISTERS[0xF] = 0;
+                    { // register X = register Y - register X, NOT(underflow bit) in register F(always)
+                    REGISTERS[0xF] = 0;
                     if (REGISTERS[Y] > REGISTERS[X] ){
                         REGISTERS[0xF] = 1;
                     } 
@@ -166,8 +183,8 @@ void CHIP8::EmulateCycle(){
              break;
             }
         case 0xB000:
-            {
-             PROGRAM_COUNTER = I + (OPCODE & 0x0FFF);
+            {//program counter = REGISTER 0 + nnn
+             PROGRAM_COUNTER = REGISTERS[0x0] + (OPCODE & 0x0FFF);
                 break;
             }
         case 0xC000: 
@@ -176,46 +193,129 @@ void CHIP8::EmulateCycle(){
              break;
              }
         case 0xD000:
-            {
+            {// display n-byte sprite starting at memory location I at (REGISTER X, REGISTER Y), set REGISTER 0xF = collision.
              unsigned char height = OPCODE & 0xF;
              REGISTERS[0xF]  = 0;
              for(int j{0};j < height;j++){
-                unsigned char sprite = MEMORY[I+j];/*
+                unsigned char sprite = MEMORY[I+j];
                 for(int k{0};k<CharWidth;k++){
-                        if(SCREEN[REGISTERS[Y]+j%SCREEN_WIDTH][REGISTERS[X]+k%SCREEN_HEIGHT]){
+                    if((sprite & 0x80)>0){
+                        if(SCREEN[REGISTERS[Y]+k%SCREEN_HEIGHT][REGISTERS[X]+j%SCREEN_WIDTH]){
                             REGISTERS[0xF] = 1;
                         }
-                        SCREEN[REGISTERS[Y]+j%SCREEN_WIDTH][REGISTERS[X]+k%SCREEN_HEIGHT] ^= 1; 
-                    }*/
+                         SCREEN[REGISTERS[Y]+k%SCREEN_HEIGHT][REGISTERS[X]+j%SCREEN_WIDTH] ^= 1;
+                       
+                    }
                 }     
-             
+             }
              break;
             }
         case 0xE000:
-            
-             break;
+            {
+                switch(OPCODE & 0x00FF){
+                    case 0x9E:
+                    {//skip next instruction if character pressed is in REGISTER X
+                        if (CurrEvent.is_character()&&(std::string(REGISTERS[X],1) == CurrEvent.character())){
+                            PROGRAM_COUNTER+=2;
+                        } 
+                        break;
+                    }
+                    case 0xA1:
+                    {//skip next instruction if character pressed is not in REGISTER X
+                        if (CurrEvent.is_character()&&!(std::string(REGISTERS[X],1) == CurrEvent.character())){
+                            PROGRAM_COUNTER += 2;
+                        }
+                        break;
+                    }
+                break;
+            }
+        }
         case 0xF000:
-            //switch(){}
+            switch(OPCODE & 0x00FF){
+                case 0x07:
+                { //set REGISTER X to the value of the delay timer
+                    REGISTERS[X] = DelayTimer;
+                    break;
+                }
+                case 0x0A:
+                { //wait until next character, then store it in REGISTER X
+                    if(!CurrEvent.is_character()){
+                        return;
+                    }
+                    REGISTERS[X] = CurrEvent.character()[0];
+                    break;
+                }
+                case 0x15:
+                { //set delay timer to the value in REGISTER X
+                    DelayTimer = REGISTERS[X];
+                    break;
+                }
+                case 0x18:
+                { // set sound timer to the value in REGISTER X 
+                    SoundTimer = REGISTERS[X];
+                    break;
+                }
+                case 0x1E:
+                { //add REGISTER X to I
+                    I += REGISTERS[X];
+                    break;
+                }
+                case 0x29:
+                { // set location of I to the hexadecimal sprite in REGISTER X
+                   I = FONSET_MEM_LOCATION + (REGISTERS[X]*5);
+                }
+                case 0x33:
+                { //store decimal representation of REGISTER X in I (hundredths place), I+1 (tenths place) and I+2 (ones place)
+                    MEMORY[I] = floor(REGISTERS[X]/100);
+                    MEMORY[I+1] = floor((REGISTERS[X]%100)/10);
+                    MEMORY[I+2] = (REGISTERS[X]%10);
+                    break;
+                }
+                case 0x55:
+                {//Set MEMORY I to MEMORY I+X to REGISTER 0 to REGISTER X
+                    for(int j{0};j<X;j++){
+                        MEMORY[j+I] = REGISTERS[j];
+                    }
+                    break;
+                }
+                case 0x65:
+                {//Set REGISTER 0 to REGISTER X to MEMORY I to MEMORY I+X
+                    for(int j{0};j<X;j++){
+                        REGISTERS[j] = MEMORY[j+I];
+                    }
+                    break;
+                }
+            }
             break;
-            
-        
     }
     PROGRAM_COUNTER += 2;
-    std::cout<<std::hex<<OPCODE<<std::endl;
 }
 /*
     first # bigger
-     101010
-    +011100
-    =======
-    1000110
-    ^ 
-  ignored(or put in another register, usually a flag)
+     01010 -> 10
+    +11000 -> -8
+    ======
+     10010 -> 2
+     ^ 
+    ignored(or put in another register, usually a flag)
     second # bigger
-     100100
-    +010110
+     01000 -> 8
+    +10110 -> -10
     =======
-    0111010
+     01101 -> -2
+     00010 -> 2
     
 
 */
+ScreenArray CHIP8::DumpScreen(){
+    return SCREEN;
+}
+std::array<unsigned char,MEM_SIZE> CHIP8::DumpMem(){
+    return MEMORY;
+}
+std::array<unsigned char,REGISTER_SIZE> CHIP8::DumpRegisters(){
+    return REGISTERS;
+}
+std::array<unsigned short, STACK_SIZE> CHIP8::DumpStack(){
+    return STACK;
+}
